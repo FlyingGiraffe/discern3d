@@ -20,5 +20,13 @@ if __name__ == '__main__':
     shapenet = dataset.ShapeNetPart(metadata['dataset_kwargs'])
     shape_data = shapenet[args.shape_idx][0]
     agents = [agent.Agent(metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
-    
+
+    # per-agent setup.
+    voxel_ids = list(range(metadata['agent_kwargs']['grid_coarse']**3))
+    ids2agents = {}
+    for i, ag in enumerate(agents):
+        ids2agents[i] = ag
+    for i, ag in enumerate(agents):
+        ag.setup({'id': i, 'id2agents': ids2agents, 'voxel_ids': voxel_ids})
+
     agents[0].scan(shape_data, np.array([[0.0, 0.0, 1.0]]))

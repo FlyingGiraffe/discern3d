@@ -18,5 +18,10 @@ Discern3D = {
         # scanner simulation
         'num_points_view': 512, # number of points that can be seen from a view
         'num_points_scan': 128, # subsample points to be the actural scan
+
+        # for the protocol
+        'T': 3, # the target number of agents that each voxel block should be stored in.
+        'K': 310, # the max number of voxel blocks that each agent can store
+        'allocation_discrepancy_threshold': 2,
     },
 }

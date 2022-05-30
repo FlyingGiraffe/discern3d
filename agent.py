@@ -16,14 +16,19 @@ class Agent(object):
         
         # for the data...
         self.data = {}
-        self.id = kwargs['id']
-        self.other_ids = kwargs['other_ids']
-        self.id2agents = kwargs['id2agents']
-        self.vox_ids = kwargs['voxel_ids']
-        self.vox2agent = {el: [] for el in self.vox_ids}
         self.T = kwargs['T']
         self.K = kwargs['K']
-        self.assignment_discrepancy_threshold = kwargs['assignment_discrepancy_threshold']
+        self.allocation_discrepancy_threshold = kwargs['allocation_discrepancy_threshold']
+
+    def setup(self, kwargs):
+        """ A function for setting up the ID's
+        """
+        self.id = kwargs['id']
+        self.id2agents = kwargs['id2agents']
+        self.other_ids = [el for el in self.id2agents if el!=self.id]
+
+        self.vox_ids = kwargs['voxel_ids']
+        self.vox2agent = {el: [] for el in self.vox_ids}
 
     def get_agent2vox(self):
         agent2vox = {el: [] for el in self.id2agents}
@@ -57,7 +62,7 @@ class Agent(object):
                            if value == min_commitment and key != self.id]
         if self.id in candidate_agent_prior_commitment:
             current_agent_commitment = candidate_agent_prior_commitment[self.id]
-            mustsend = (current_agent_commitment - min_commitment) >= self.assignment_discrepancy_threshold
+            mustsend = (current_agent_commitment - min_commitment) >= self.allocation_discrepancy_threshold
         else:
             mustsend = True
         return (not mustsend), send_candidates 
@@ -98,10 +103,15 @@ class Agent(object):
 
                     # send them. TODO What should it do if it fails?
                     self.id2agents[send_to].update(method, data)
+    
+                for agent_id in self.other_ids:
+                    other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
+                    other.update("update_vox2agent", {'vox2agent': self.vox2agent})
 
             else:
                 print("voxel seems to be already covered by K agents -- tossing!")
-        
+            
+           
         elif method == 'update_vox2agent':
             # reconcile the vox2agent from another agent to this...
             for key in self.vox2agent:
@@ -127,11 +137,6 @@ class Agent(object):
                     self.vox2agent[key] = merged_topK
                 else: # we good. let' just merge it.
                     self.vox2agent[key] = union_agents
-
-        # TODO: now broadcast the new self.vox2agent
-        for agent_id in self.other_ids:
-            other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
-            other.update("update_vox2agent", {'vox2agent': self.vox2agent})
 
   
     def scan(self, shape_data, view):
