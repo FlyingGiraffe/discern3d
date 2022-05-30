@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import minkowski
+from datetime import datetime
 
 class Agent(object):
     def __init__(self, kwargs):
@@ -13,6 +14,126 @@ class Agent(object):
         self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
         self.repn_fine = []
         
+        # for the data...
+        self.data = {}
+        self.id = kwargs['id']
+        self.other_ids = kwargs['other_ids']
+        self.id2agents = kwargs['id2agents']
+        self.vox_ids = kwargs['voxel_ids']
+        self.vox2agent = {el: [] for el in self.vox_ids}
+        self.T = kwargs['T']
+        self.K = kwargs['K']
+        self.assignment_discrepancy_threshold = kwargs['assignment_discrepancy_threshold']
+
+    def get_agent2vox(self):
+        agent2vox = {el: [] for el in self.id2agents}
+        for vox_id, agent_list in self.vox2agent:
+            for el in agent_list: 
+                agent_id = el[0]
+                agent2vox[agent_id].append(vox_id)
+        return agent2vox
+
+    def cankeep(self, vox_id, a2v):
+        """ 
+        Args:
+          vox_id: voxel id string.
+          a2v: a mapping that maps each AID to a list of voxel id's.
+        Returns:
+          canKeep: True means that keeping the data onboard does not jeopardize 
+            crossing the assignment discrepancy threshold
+          send_candidates: candidates that, if the agent chooses to send, are the most "beneficial" to send to 
+            ( the ones allocated to the least number of voxels. )
+        """
+        mustsend = False
+        send_candidates = None
+
+        candidate_agent_prior_commitment =  {}
+        vox_current_holders = [el[0] for el in self.vox2agent[vox_id]]
+        for el in [aid for aid in self.id2agents if aid not in vox_current_holders]:
+            candidate_agent_prior_commitment[el] = len(a2v[vox_id])
+    
+        min_commitment = min(list(candidate_agent_prior_commitment.values()))
+        send_candidates = [key for key, value in candidate_agent_prior_commitment.items() 
+                           if value == min_commitment and key != self.id]
+        if self.id in candidate_agent_prior_commitment:
+            current_agent_commitment = candidate_agent_prior_commitment[self.id]
+            mustsend = (current_agent_commitment - min_commitment) >= self.assignment_discrepancy_threshold
+        else:
+            mustsend = True
+        return (not mustsend), send_candidates 
+
+    def update(self, method, data):
+        if method == 'scanned':
+            # this means that new data is scanned, and the agent needs to decide
+            # what to do with that scan.
+            vox_id = data['vox_id']
+            vox_hash = datetime.now() # idk, something that can be sorted by time.
+
+            if len(self.vox2agent[vox_id]) < self.K:
+                # here, we have a decision to make. we can either pass this data to another agent, 
+                # or keep it for ourselves. 
+                a2v = self.get_agent2vox()
+                cankeep, send_candidates = self.cankeep(self, vox_id, a2v)
+                
+                # if we can get away with not sending it AND the data can fit in memory...
+                if cankeep and len(self.data) < self.T:
+                    self.data[vox_id] = data['pointcloud']
+                    self.vox2agent[vox_id].append((self.id, vox_hash))
+
+                    # now let's notify the other agents of this change...
+                    for agent_id in self.other_ids:
+                        other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
+                        other.update("update_vox2agent", {'vox2agent': self.vox2agent})
+
+                # otherwise...
+                else:
+                    # this means the memory of this agent is  full currently, so
+                    # let's pass this onto another agent. Let's pick a random agent 
+                    # from send_candidates
+                    send_to = np.random.choice(send_candidates)
+
+                    # then, do a quick sync with the other agent. Do they indeed have
+                    # enough space to store the data you're about to send them?
+                    # TODO. eugh. 
+
+                    # send them. TODO What should it do if it fails?
+                    self.id2agents[send_to].update(method, data)
+
+            else:
+                print("voxel seems to be already covered by K agents -- tossing!")
+        
+        elif method == 'update_vox2agent':
+            # reconcile the vox2agent from another agent to this...
+            for key in self.vox2agent:
+                other_vox2agent = data['vox2agent']
+                mine = self.vox2agent[key]
+                yours = other_vox2agent[key]
+                union_agents = list(set(mine).union(set(yours)))
+                # if the union <= length K, we don't have a problem... but...
+                if len(union_agents) >= self.K:
+                    # we have to merge them, but in a way that will be consistent.
+                    merged = sorted(union_agents,
+                                    key=lambda x: x[1]) # we sort by the timestamp
+                    merged_topK = merged[:self.K]
+                    merged_remove = merged[self.K:]
+
+                    # now of the ones that are going to be removed,
+                    # check if this agent belongs in there. Remove the
+                    # data if necessary.
+                    for el in merged_remove:
+                        if el[0] == self.id:
+                            del self.data[key] # clear the data
+                    
+                    self.vox2agent[key] = merged_topK
+                else: # we good. let' just merge it.
+                    self.vox2agent[key] = union_agents
+
+        # TODO: now broadcast the new self.vox2agent
+        for agent_id in self.other_ids:
+            other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
+            other.update("update_vox2agent", {'vox2agent': self.vox2agent})
+
+  
     def scan(self, shape_data, view):
         '''
         Args:
