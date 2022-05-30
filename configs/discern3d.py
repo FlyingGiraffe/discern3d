@@ -1,5 +1,12 @@
 import json
+import os
+
+orig_dir = os.getcwd()
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
 path_data = json.load(open('paths.json'))
+os.chdir(orig_dir)
 from .utils import *
 
 Discern3D = {

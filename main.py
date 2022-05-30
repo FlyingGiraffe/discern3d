@@ -9,8 +9,8 @@ import agent
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument('--config', type=str, default='Discern3D', help='config file name')
-    parser.add_argument('--class_choice', type=str, default='chair', help='dataset class choice')
-    parser.add_argument('--shape_idx', type=int, default=0, help='dataset shape idx')
+    parser.add_argument('--class_choice', type=str, default='airplane', help='dataset class choice')
+    parser.add_argument('--shape_idx', type=int, default=4, help='dataset shape idx')
     args = parser.parse_args()
     
     config = getattr(configs, args.config)
@@ -29,4 +29,8 @@ if __name__ == '__main__':
     for i, ag in enumerate(agents):
         ag.setup({'id': i, 'id2agents': ids2agents, 'voxel_ids': voxel_ids})
 
-    agents[0].scan(shape_data, np.array([[0.0, 0.0, 1.0]]))
+
+    # Runs scanning loop
+    identity_transition = lambda x: (np.random.rand(1, 3) * 2) - 1
+    finished_callback = lambda: False
+    agents[0].scan_loop(shape_data, np.array([[0.0, 0.0, 1.0]]), identity_transition, finished_callback, scan_hz=20, vis=True)

@@ -2,24 +2,70 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import minkowski
 from datetime import datetime
+import time
+from vis import vis_voxel_grid
 
 class Agent(object):
     def __init__(self, kwargs):
         self.grid_coarse = kwargs['grid_coarse']
         self.grid_fine = kwargs['grid_fine']
+
         self.num_points_view = kwargs['num_points_view']
         self.num_points_scan = kwargs['num_points_scan']
         
-        self.repn_coarse = np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)
-        self.repn_fine = [[[None for i in range(kwargs['grid_coarse'])] \
-                          for j in range(kwargs['grid_coarse'])] \
-                          for k in range(kwargs['grid_coarse'])]
-        
+        # self.repn_coarse = np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)
+        # self.repn_fine = [[[None for i in range(kwargs['grid_coarse'])] \
+        #                   for j in range(kwargs['grid_coarse'])] \
+        #                   for k in range(kwargs['grid_coarse'])]
+
+        self.repn_coarse = [np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)]
+        self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
+        self.repn_fine = []
+
         # for the data...
         self.data = {}
         self.T = kwargs['T']
         self.K = kwargs['K']
         self.allocation_discrepancy_threshold = kwargs['allocation_discrepancy_threshold']
+
+
+    def run(self, scan_hz=1.0):
+        # step 1: init listening server loop
+
+        # step 1.5: init high-res protocol loop
+
+        # step 2: initialize course-rep get-scene loop
+
+        # step 3: scan data
+        pass
+
+
+    def scan_loop(self, shape_data, view, view_transition, finished_callback, scan_hz=20, vis=False):
+        timestep = 0
+        while not finished_callback():
+            # scan data
+            course_scan, course_idxs, fine_scans = self.scan(shape_data, view)
+
+            # update global coarse representation
+            self.repn_coarse.append(course_scan)
+
+            # update global fine representation
+            for i, course_idx in enumerate(course_idxs):
+                this_fine_idx = self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
+                if this_fine_idx == -1:
+                    self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]] = len(self.repn_fine)
+                    self.repn_fine.append([fine_scans[i]])
+                else:
+                    self.repn_fine[this_fine_idx].append(fine_scans[i])
+
+            # update view
+            view = view_transition(view)
+            time.sleep(1/scan_hz)
+            print(timestep)
+
+            if vis:
+                vis_voxel_grid(self.fine_voxel_grid)
+            timestep += 1
 
     def setup(self, kwargs):
         """ A function for setting up the ID's
@@ -153,24 +199,63 @@ class Agent(object):
         points_view = farthest_subsample_points(shape_data, view, self.num_points_view)
         scan_idx = np.random.choice(self.num_points_view, self.num_points_scan)
         points_scan = points_view[scan_idx]
+
+        # create binary voxel grid at course resolution
+        course_scan = np.zeros(self.repn_coarse[0].shape)
+        perpoint_course_idxs = np.floor((points_scan + 1) * self.grid_coarse / 2).astype(int)
+        course_idxs = np.unique(perpoint_course_idxs, axis=0)
+        course_scan[course_idxs[:, 0], course_idxs[:, 1], course_idxs[:, 2]] = 1
+
+        # loop through newly-populated "coarse" indices, and add to their fine representation
+        res = self.grid_fine * self.grid_coarse
+        perpoint_fine_idxs = np.floor((points_scan + 1) * res / 2).astype(int)
+        fine_scan_subvoxels = []
+        for i in range(course_idxs.shape[0]):
+            fine2course = np.prod(perpoint_course_idxs == course_idxs[i:i+1, :], axis=1).astype(np.bool)  # (3,) array
+            subvoxel_idxs = perpoint_fine_idxs[fine2course]
+            subvoxel_idxs[:, 0] -= course_idxs[i, 0] * self.grid_fine
+            subvoxel_idxs[:, 1] -= course_idxs[i, 1] * self.grid_fine
+            subvoxel_idxs[:, 2] -= course_idxs[i, 2] * self.grid_fine
+
+            # create fine-resolution voxel data chunk
+            subvoxel = np.zeros((self.grid_fine, self.grid_fine, self.grid_fine), dtype=np.bool)
+            subvoxel[subvoxel_idxs[:, 0], subvoxel_idxs[:, 1], subvoxel_idxs[:, 2]] = True
+            fine_scan_subvoxels.append(subvoxel)
         
-        repn_coarse_new = np.zeros(self.repn_coarse.shape, dtype=bool)
-        coarse_new_idx = np.floor((points_scan + 1) * self.grid_coarse / 2).astype(int)
-        repn_coarse_new[coarse_new_idx[:, 0], coarse_new_idx[:, 1], coarse_new_idx[:, 2]] = True
-        
-        idx_occ = grid2idx(repn_coarse_new)
-        
-        repn_fine_new = []
-        for i in range(len(idx_occ)):
-            repn_fine_box = np.zeros((self.grid_fine, self.grid_fine, self.grid_fine), dtype=bool)
-            points_in_box_mask = np.linalg.norm(coarse_new_idx - idx_occ[i], axis=-1) == 0
-            points_in_box = points_scan[points_in_box_mask]
-            points_relative_coord = (points_in_box + 1) * self.grid_coarse / 2 - coarse_new_idx[points_in_box_mask]
-            fine_box_idx = np.floor(points_relative_coord * self.grid_fine).astype(int)
-            repn_fine_box[fine_box_idx[:, 0], fine_box_idx[:, 1], fine_box_idx[:, 2]] = True
-            repn_fine_new.append(repn_fine_box)
-        
-        return repn_coarse_new, repn_fine_new, idx_occ
+        # repn_coarse_new = np.zeros(self.repn_coarse.shape, dtype=bool)
+        # coarse_new_idx = np.floor((points_scan + 1) * self.grid_coarse / 2).astype(int)
+        # repn_coarse_new[coarse_new_idx[:, 0], coarse_new_idx[:, 1], coarse_new_idx[:, 2]] = True
+        #
+        # idx_occ = grid2idx(repn_coarse_new)
+        #
+        # repn_fine_new = []
+        # for i in range(len(idx_occ)):
+        #     repn_fine_box = np.zeros((self.grid_fine, self.grid_fine, self.grid_fine), dtype=bool)
+        #     points_in_box_mask = np.linalg.norm(coarse_new_idx - idx_occ[i], axis=-1) == 0
+        #     points_in_box = points_scan[points_in_box_mask]
+        #     points_relative_coord = (points_in_box + 1) * self.grid_coarse / 2 - coarse_new_idx[points_in_box_mask]
+        #     fine_box_idx = np.floor(points_relative_coord * self.grid_fine).astype(int)
+        #     repn_fine_box[fine_box_idx[:, 0], fine_box_idx[:, 1], fine_box_idx[:, 2]] = True
+        #     repn_fine_new.append(repn_fine_box)
+        #
+        # return repn_coarse_new, repn_fine_new, idx_occ
+
+        return course_scan, course_idxs, fine_scan_subvoxels
+
+    @property
+    def fine_voxel_grid(self):
+        res = self.grid_fine*self.grid_coarse
+        fine_grid = np.zeros((res, res, res), dtype=bool)
+
+        course_idxs = np.where(self.repn_fine_idx != -1)
+        for i, j, k in zip(course_idxs[0], course_idxs[1], course_idxs[2]):
+            fine_idx = self.repn_fine_idx[i, j, k]
+            subvoxel = np.stack(self.repn_fine[fine_idx], axis=0)
+            subvoxel = np.bitwise_or.reduce(subvoxel, axis=0)
+            fine_grid[i*self.grid_fine: (i+1)*self.grid_fine,
+                      j*self.grid_fine: (j+1)*self.grid_fine,
+                      k*self.grid_fine: (k+1)*self.grid_fine] = subvoxel
+        return fine_grid
 
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
@@ -188,8 +273,4 @@ def grid2idx(grid):
     Output:
       idx_occ: indices for voxels of value 1, size (n_occ, 3)
     '''
-    nb_grid = grid.shape[0]
-    x = np.arange(nb_grid); y = np.arange(nb_grid); z = np.arange(nb_grid)
-    X, Y, Z = np.meshgrid(x, y, z)
-    grid_idx = np.stack((X, Y, Z), axis=-1)
-    return grid_idx[grid]
+    return np.stack(np.where(grid), axis=1)
