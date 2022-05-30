@@ -11,8 +11,9 @@ class Agent(object):
         self.num_points_scan = kwargs['num_points_scan']
         
         self.repn_coarse = np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)
-        self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
-        self.repn_fine = []
+        self.repn_fine = [[[None for i in range(kwargs['grid_coarse'])] \
+                          for j in range(kwargs['grid_coarse'])] \
+                          for k in range(kwargs['grid_coarse'])]
         
         # for the data...
         self.data = {}
@@ -153,19 +154,23 @@ class Agent(object):
         scan_idx = np.random.choice(self.num_points_view, self.num_points_scan)
         points_scan = points_view[scan_idx]
         
-        repn_coarse_new = np.zeros(self.repn_coarse.shape)
+        repn_coarse_new = np.zeros(self.repn_coarse.shape, dtype=bool)
         coarse_new_idx = np.floor((points_scan + 1) * self.grid_coarse / 2).astype(int)
-        repn_coarse_new[coarse_new_idx[:, 0], coarse_new_idx[:, 1], coarse_new_idx[:, 2]] = 1
+        repn_coarse_new[coarse_new_idx[:, 0], coarse_new_idx[:, 1], coarse_new_idx[:, 2]] = True
         
-        num_vox_coarse_new = (repn_coarse_new != 0).sum()
-        repn_fine_idx_tmp = -np.ones(self.repn_fine_idx.shape)
-        repn_fine_idx_tmp[repn_coarse_new != 0] = np.arange(num_vox_coarse_new)
+        idx_occ = grid2idx(repn_coarse_new)
         
         repn_fine_new = []
-        for i in range(num_vox_coarse_new):
-            pass
+        for i in range(len(idx_occ)):
+            repn_fine_box = np.zeros((self.grid_fine, self.grid_fine, self.grid_fine), dtype=bool)
+            points_in_box_mask = np.linalg.norm(coarse_new_idx - idx_occ[i], axis=-1) == 0
+            points_in_box = points_scan[points_in_box_mask]
+            points_relative_coord = (points_in_box + 1) * self.grid_coarse / 2 - coarse_new_idx[points_in_box_mask]
+            fine_box_idx = np.floor(points_relative_coord * self.grid_fine).astype(int)
+            repn_fine_box[fine_box_idx[:, 0], fine_box_idx[:, 1], fine_box_idx[:, 2]] = True
+            repn_fine_new.append(repn_fine_box)
         
-        return repn_coarse_new, 
+        return repn_coarse_new, repn_fine_new, idx_occ
 
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
@@ -174,3 +179,17 @@ def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
                              metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
     idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
     return pointcloud[idx, :]
+
+
+def grid2idx(grid):
+    '''
+    Args:
+      grid: dtype=bool, size (nb_grid, nb_grid, nb_grid)
+    Output:
+      idx_occ: indices for voxels of value 1, size (n_occ, 3)
+    '''
+    nb_grid = grid.shape[0]
+    x = np.arange(nb_grid); y = np.arange(nb_grid); z = np.arange(nb_grid)
+    X, Y, Z = np.meshgrid(x, y, z)
+    grid_idx = np.stack((X, Y, Z), axis=-1)
+    return grid_idx[grid]
