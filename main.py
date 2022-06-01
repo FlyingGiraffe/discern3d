@@ -19,18 +19,24 @@ if __name__ == '__main__':
     
     shapenet = dataset.ShapeNetPart(metadata['dataset_kwargs'])
     shape_data = shapenet[args.shape_idx][0]
-    agents = [agent.Agent(metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
+    agents = [agent.Agent(i, metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
 
     # per-agent setup.
-    voxel_ids = list(range(metadata['agent_kwargs']['grid_coarse']**3))
-    ids2agents = {}
-    for i, ag in enumerate(agents):
-        ids2agents[i] = ag
-    for i, ag in enumerate(agents):
-        ag.setup({'id': i, 'id2agents': ids2agents, 'voxel_ids': voxel_ids})
-
+    # voxel_ids = list(range(metadata['agent_kwargs']['grid_coarse']**3))
+    # ids2agents = {}
+    # for i, ag in enumerate(agents):
+    #     ids2agents[i] = ag
+    # for i, ag in enumerate(agents):
+    #     ag.setup({'id': i, 'id2agents': ids2agents, 'voxel_ids': voxel_ids})
 
     # Runs scanning loop
-    identity_transition = lambda x: (np.random.rand(1, 3) * 2) - 1
+    
+    viewpoint_per_agent = np.random.randn(len(agents),3)
+    viewpoint_per_agent = viewpoint_per_agent / np.linalg.norm(viewpoint_per_agent, axis=1, keepdims=True)
+    identity_transition = lambda x: x 
     finished_callback = lambda: False
-    agents[0].scan_loop(shape_data, np.array([[0.0, 0.0, 1.0]]), identity_transition, finished_callback, scan_hz=20, vis=True)
+
+
+    for i in range(len(agents)):
+        agents[i].run(shape_data, viewpoint_per_agent[i:i+1], identity_transition)
+    # agents[0].scan_loop(shape_data, np.array([[0.0, 0.0, 1.0]]), identity_transition, finished_callback, scan_hz=20, vis=True)

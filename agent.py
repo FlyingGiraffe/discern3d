@@ -34,37 +34,80 @@ class Agent(object):
         self.my_ip = self.agent_ips[agent_idx]
 
         # final course and fine representations
-        self.repn_coarse = [np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)]
+        self.repn_coarse = np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)
         self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
         self.repn_fine = []
 
         # rep for building a dynamic priority list
         self.gossip_queue = queue.Queue()
-        self.priority_list_timesteps = [[[[np.inf for a in range(len(self.agent_ips))] for i in range(self.grid_coarse**3)] for j in range(self.grid_coarse**3)] for k in range(self.grid_coarse**3)]
+        self.priority_list_timesteps = [[[[float('inf') for a in range(len(self.agent_ips))] for i in range(self.grid_coarse)] for j in range(self.grid_coarse)] for k in range(self.grid_coarse)]
         self.priority_list_locks = [[[threading.Condition() for i in range(self.grid_coarse)] for j in range(self.grid_coarse)] for k in range(self.grid_coarse)]
 
         # Queue and temporary state for handling fine representation
         self.received_packets = queue.Queue()
         self.temp_repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
         self.temp_repn_fine = []
+        # TODO add list of locks per vox OR switch temp_repn_fine_idx to list implementation.
 
         # Thread management
         self.threads_lock = threading.RLock()
         self.threads = []
 
 
-    def run(self, scan_hz=1.0):
+    def run(self, shape_data, view, view_transition, 
+            scan_hz=1.0, gossip_hz=1.0, clean_hz=1.0, lowres_hz=1.0, 
+            update_retry_hz=1.0):
         # step 1: init listening server loop
+        thread = threading.Thread(target=self.init_server, args=())
+        thread.start()
+        self.threads.append(thread)
 
         # step 2: init gossiping loop
+        gossip_kwargs = {'finished_callback' : (lambda :  False),
+                         'freq': gossip_hz}
+        thread = threading.Thread(target=self.gossip_loop, kwargs=gossip_kwargs) 
+        thread.start()
+        self.threads.append(thread)
 
         # step 3: init high-res update loop
+        highres_update_kwargs = {'finished_callback': (lambda: False),
+                                'update_retry_hz': update_retry_hz}        
+        thread = threading.Thread(target=self.update_loop, kwargs=highres_update_kwargs) 
+        thread.start()
+        self.threads.append(thread)
 
         # step 4: initialize low-res get loop
+        lowres_update_kwargs = {'finished_callback': (lambda: False),
+                                'freq': lowres_hz}        
+        thread = threading.Thread(target=self.get_loop, kwargs=lowres_update_kwargs) 
+        thread.start()
+        self.threads.append(thread)
 
         # step 5: init scan loop
-        pass
 
+        scan_kwargs={'shape_data': shape_data,
+            'view': view,
+            'view_transition': view_transition, 
+            'finished_callback': (lambda : False), 
+            'scan_hz': 20, 
+            'vis': False}
+        thread = threading.Thread(target=self.scan_loop, kwargs=scan_kwargs) 
+        thread.start()
+        self.threads.append(thread)
+
+
+        # CLEANUP 
+        thread = threading.Thread(target=self.cleanup, kwargs={'clean_hz': clean_hz}) 
+        thread.start()
+        self.threads.append(thread)
+
+        
+    def cleanup (self, clean_hz = 1.0):
+        while True: # cleanup
+            for thread in self.threads:
+                if not thread.isAlive():
+                    thread.join()
+            time.sleep(1/clean_hz) 
 
     # =================================================================
     # ====================== BUILD RPC PROTOCOL ======================
@@ -73,28 +116,33 @@ class Agent(object):
         with SimpleXMLRPCServer((self.my_ip[0], self.my_ip[1]), requestHandler=RequestHandler) as server:
             server.register_introspection_functions()
             server.register_function(self.get_rpc, 'get')
+            print('Registered GET RPC')
             server.register_function(self.get_all_rpc, 'get_all')
+            print('Registered GET_ALL RPC')
             server.register_function(self.get_priority_list_rpc, 'get_priority_list')
+            print('Registered GET_PRIORITY_LIST RPC')
             server.register_function(self.update_priority_list_rpc, 'update_priority_list')
+            print('Registered UPDATE_PRIORITY_LIST RPC')
             server.register_function(self.update_rpc, 'update')
+            print('Registered UPDATE RPC')
             server.serve_forever()
 
     def get_rpc(self, course_idx):
         return self.repn_coarse[course_idx[0], course_idx[1], course_idx[2]]
 
     def get_all_rpc(self):
-        return self.repn_coarse
+        return self.repn_coarse.tolist()
 
     def update_rpc(self, course_idx, packet_id, fine_scan):
         timestep = time.time()
-        self.received_packets.put((course_idx, packet_id, fine_scan, timestep))
+        self.received_packets.put((course_idx, packet_id, np.array(fine_scan), timestep))
         return "success"
 
     def get_priority_list_rpc(self, coarse_idx):
-        return self.priority_list[coarse_idx]
+        return self.priority_list_timesteps[coarse_idx[0]][coarse_idx[1]][coarse_idx[2]]
 
     def update_priority_list_rpc(self, coarse_idx, update):
-        self.priority_list[coarse_idx] = update
+        self.priority_list_timesteps[coarse_idx[0]][coarse_idx[1]][coarse_idx[2]] = update
         return "success"
 
     # =================================================================
@@ -102,12 +150,21 @@ class Agent(object):
     # =================================================================
     def get_loop(self, finished_callback, freq=1.0):
         while not finished_callback():
-            for i, agent_ip in self.agent_ips:
+            for i, agent_ip in enumerate(self.agent_ips):
                 if i == self.my_idx:
                     continue
-                s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
-                coarse_grid = s.get_all()
-                self.repn_coarse |= coarse_grid
+                try:
+                    s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                    coarse_grid = s.get_all()
+                except ConnectionRefusedError as e:
+                    continue
+                
+                self.repn_coarse |= np.array(coarse_grid)
+
+
+            print('Visualization')
+            vis_voxel_grid(self.repn_coarse) 
+
             time.sleep(1/freq)
 
     # =================================================================
@@ -120,14 +177,20 @@ class Agent(object):
         :param freq:
         :return:
         """
+
         while not finished_callback():
-            observed_voxel_ids = grid2idx(self.grid_coarse)
+            observed_voxel_ids = grid2idx(self.repn_coarse)
             for voxel_id in observed_voxel_ids:
                 for ip_address in self.agent_ips:
-                    s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
-                    their_priority_list_tstamps = s.get_priority_list(voxel_id)
-                    our_priority_list_tstamps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]]
-                    for i, tstamp in their_priority_list_tstamps:
+                    
+                    try:
+                        s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                        their_priority_list_tstamps = s.get_priority_list(voxel_id.tolist())
+                    except ConnectionRefusedError as e:
+                        continue
+                    
+                    our_priority_list_tstamps = self.priority_list_timesteps[voxel_id[0]][voxel_id[1]][voxel_id[2]]
+                    for i, tstamp in enumerate(their_priority_list_tstamps):
                         if tstamp < our_priority_list_tstamps[i]:
                             self.gossip_queue.put((voxel_id, tstamp, self.agent_ips[i]))
             time.sleep(1/freq)
@@ -140,9 +203,13 @@ class Agent(object):
             agent_idx = agent_id  # todo: fix me!
 
             # get current and updated set of agent timesteps
-            old_priority_timesteps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]].copy()
-            self.priority_list_timesteps[voxel_id[0] * self.grid_coarse ** 2 + voxel_id[1] * self.grid_coarse + voxel_id[2]][agent_idx] = new_tstep
-            new_priority_timesteps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]]
+            self.priority_list_timesteps[voxel_id[0]][voxel_id[1]][voxel_id[2]][agent_idx] = new_tstep
+
+            # check if we "lost" / not in top-k for this voxel-priority list
+            agent_timestamps = self.priority_list_timesteps[voxel_id[0]][voxel_id[1]][voxel_id[2]] 
+            fightingchance  = sum([el < agent_timestamps[self.my_idx] for el in agent_timestamps]) < self.K
+            if not fightingchance and np.isinf(agent_timestamps[self.my_idx]):
+                self.gossip_queue.put((voxel_id, time.time(), self.agent_ips[self.my_idx]))
 
             # ------ check if this affects our top-k agents
             # check 1: we added a new agent to the initially lacking priority list
@@ -167,22 +234,21 @@ class Agent(object):
     # =================================================================
     # ================== FINE REPRESENTATION UPDATE ===================
     # =================================================================
-    def update_loop(self, finished_callback):
+    def update_loop(self, finished_callback, update_retry_hz):
         """
         Listens to shared queue and spawns appropriate `update` calls
         :return:
         """
-
         while not finished_callback():
             received_packet = self.received_packets.get(block=True)
-            thread = threading.Thread(target=self.update_packet, args=(received_packet))
+            thread = threading.Thread(target=self.update_packet, args=(received_packet, update_retry_hz))
             thread.start()
 
             self.threads_lock.acquire()
             self.threads.append(thread)
             self.threads_lock.release()
 
-    def update_packet(self, data):
+    def update_packet(self, data, update_retry_hz):
         """
         Given a data packet, adds it into "temporary" memory and transmits it to the appropriate agents.
         :param data: Tuple containing course_idx, packet_id, and voxel_data
@@ -191,7 +257,7 @@ class Agent(object):
         coarse_idx, packet_id, voxel_data, timestamp = data
 
         # we just received a new voxel/timestep --> add it to our gossip-queue to notify of priority-list updates
-        cur_timestep = self.priority_list_timesteps[coarse_idx[0]*self.grid_coarse**2 + coarse_idx[1]*self.grid_coarse + coarse_idx[2]]
+        cur_timestep = self.priority_list_timesteps[coarse_idx[0]][coarse_idx[1]][coarse_idx[2]][self.my_idx] 
         if timestamp < cur_timestep:
             self.gossip_queue.put((coarse_idx, timestamp, self.my_ip))
 
@@ -201,14 +267,26 @@ class Agent(object):
             self.temp_repn_fine_idx[coarse_idx[0], coarse_idx[1], coarse_idx[2]] = len(self.temp_repn_fine)  # todo: make thread safe!!
             self.temp_repn_fine.append({packet_id: voxel_data})
         else:
-            self.temp_repn_fine[fine_idx][voxel_data] = packet_id
+            self.temp_repn_fine[fine_idx][packet_id] = voxel_data
 
         # enter a loop that sends the data to appropriate agents
-        thread = threading.Thread(target=self.update_packet_replication, args=(coarse_idx, packet_id))
+        thread = threading.Thread(target=self.update_packet_replication, args=(coarse_idx, packet_id, update_retry_hz))
         thread.start()
         self.threads.append(thread)
 
-    def update_packet_replication(self, course_idx, packet_id):
+    def transmit_data(self, agent_ip, course_idx, packet_id):    
+        try:
+            s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+            fine_scan_idx = self.temp_repn_fine_idx[course_idx[0]][course_idx[1]][course_idx[2]]
+            fine_scan = self.temp_repn_fine[fine_scan_idx][packet_id]
+            res = s.update(course_idx, packet_id, fine_scan.tolist())
+        except ConnectionRefusedError as e:  # TODO add error types here
+            return False
+
+        return res == 'success'
+
+
+    def update_packet_replication(self, course_idx, packet_id, update_retry_hz):
         """
         Given the course-grid index and packet-id, this method appropriately transmits the voxel data-packet stored
         in self.temp_repn_fine to the appropriate agents. It will loop until it is confirmed that the data is sent
@@ -218,44 +296,64 @@ class Agent(object):
         :param packet_id: unique int identifier of this data packet
         :return: None
         """
-        # iterate until our priority list converges
-        transmitted_history = {self.my_ip}
-        while np.any(np.isinf(self.priority_list_timesteps[course_idx[0]*self.grid_coarse**2 + course_idx[1]*self.grid_coarse + course_idx[2]])):
+        # iterate until our priority list convergesself.grid_coarse + 
+        transmitted_history = {self.my_idx}
+        
+        agent_timestamps = self.priority_list_timesteps[course_idx[0]][course_idx[1]][course_idx[2]] 
+        fightingchance = sum([el < agent_timestamps[self.my_idx] for el in agent_timestamps]) < self.K
+        num_unknown = np.sum(np.isinf(agent_timestamps))
+        our_cur_priority = np.where(np.argsort(agent_timestamps) == self.my_idx)[0]
+        we_win = our_cur_priority < (self.K - num_unknown)  # we are in the top K*, and we know all except (K*-1) timsteps
+
+        while fightingchance and not we_win:
+            # np.any(np.isinf(self.priority_list_timesteps[course_idx[0]][course_idx[1]][course_idx[2]])): # TODO change this to be top K not infinity for each voxel
             # acquire coarse-grid lock
             this_lock = self.priority_list_locks[course_idx[0]][course_idx[1]][course_idx[2]]
             this_lock.acquire()
 
             # transmit to all agents in current priority list
-            cur_priority_tsteps = self.priority_list_timesteps[course_idx[0] * self.grid_coarse ** 2 + course_idx[1] * self.grid_coarse + course_idx[2]]
+            cur_priority_tsteps = self.priority_list_timesteps[course_idx[0]][course_idx[1]][course_idx[2]]
             cur_topk_agents = np.argsort(cur_priority_tsteps)[:self.K]
             for i in cur_topk_agents:
                 agent_ip = self.agent_ips[i]
-                if agent_ip in transmitted_history or np.isinf(cur_priority_tsteps[i]):
+                if i in transmitted_history or np.isinf(cur_priority_tsteps[i]):
                     continue
                 success = self.transmit_data(agent_ip, course_idx, packet_id)
                 if success:
-                    transmitted_history.add(agent_ip)
+                    transmitted_history.add(i)
 
             # sleep until priority list is updated
             this_lock.wait()
             this_lock.release()
 
+            # update while loop flags
+            agent_timestamps = self.priority_list_timesteps_timesteps[course_idx[0]][course_idx[1]][course_idx[2]] 
+            fightingchance = sum([el < agent_timestamps[self.my_idx] for el in agent_timestamps]) < self.K
+            num_unknown = np.sum(np.isinf(agent_timestamps))
+            our_cur_priority = np.where(np.argsort(agent_timestamps) == self.my_idx)[0]
+            we_win = our_cur_priority < (self.K - num_unknown)  # we are in the top K*, and we know all except (K*-1) timsteps
+   
+
         # once we break out of the loop, we know we have reached consensus on priority list
-        fully_replicated = set(self.priority_list[course_idx][:self.K]).issubset(transmitted_history)
+        k_winners = np.argsort(self.priority_list_timesteps[course_idx[0]][course_idx[1]][course_idx[2]])[:self.K]
+        fully_replicated = set(k_winners).issubset(transmitted_history)
         while not fully_replicated:
-            for agent_ip in self.priority_list[course_idx][:self.K]:
-                if agent_ip in transmitted_history:
+            for agent_idx in k_winners:
+                if agent_idx in transmitted_history:
                     continue
-                success = self.transmit_data(agent_ip, course_idx, packet_id)
+                success = self.transmit_data(self.agent_ips[agent_idx], course_idx, packet_id)
                 if success:
-                    transmitted_history.add(agent_ip)
-            fully_replicated = set(self.priority_list[course_idx][:self.K]).issubset(transmitted_history)
+                    transmitted_history.add(agent_idx)
+            time.sleep(1/update_retry_hz)
+            
+            k_winners = sorted(self.priority_list_timesteps[course_idx[0]][course_idx[1]][course_idx[2]])[:self.K]
+            fully_replicated = set(k_winners).issubset(transmitted_history)
 
         # if we are in the priority list, add the voxel to storage
         temp_fine_idx = self.temp_repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
         voxel_data = self.temp_repn_fine[temp_fine_idx][packet_id]
 
-        if self.my_ip in self.priority_list[course_idx][:self.K]:
+        if self.my_ip in k_winners:
             fine_idx = self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
             if fine_idx == -1:
                 self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]] = len(self.temp_repn_fine)  # todo: make thread safe!!
@@ -375,21 +473,19 @@ class Agent(object):
         while not finished_callback():
             # scan data
             course_scan, course_idxs, fine_scans = self.scan(shape_data, view)
+            course_idxs = course_idxs.tolist()
 
             # update global coarse representation
-            self.repn_coarse.append(course_scan)
-
+            self.repn_coarse = self.repn_coarse | np.array(course_scan, dtype=np.bool)
+            
             # add fine-scan packets to queue
             for i, course_idx in enumerate(course_idxs):
-                packet_id = time.time_ns() + hash(str(course_idx))
+                packet_id = (time.time_ns() + hash(str(course_idx)))%(2**16)
                 self.received_packets.put((course_idx, packet_id, fine_scans[i], time.time()))
 
             # update view
             view = view_transition(view)
             time.sleep(1/scan_hz)
-
-            if vis:
-                vis_voxel_grid(self.fine_voxel_grid)
             jj += 1
   
     def scan(self, shape_data, view):
@@ -407,7 +503,7 @@ class Agent(object):
         points_scan = points_view[scan_idx]
 
         # create binary voxel grid at course resolution
-        course_scan = np.zeros(self.repn_coarse[0].shape)
+        course_scan = np.zeros(self.repn_coarse.shape)
         perpoint_course_idxs = np.floor((points_scan + 1) * self.grid_coarse / 2).astype(int)
         course_idxs = np.unique(perpoint_course_idxs, axis=0)
         course_scan[course_idxs[:, 0], course_idxs[:, 1], course_idxs[:, 2]] = 1

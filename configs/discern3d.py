@@ -16,10 +16,10 @@ Discern3D = {
         'num_points': 2048,
     },
     
-    'num_agents': 5,
+    'num_agents': 1,
     'agent_kwargs': {
         # scene representation
-        'grid_coarse': 8,
+        'grid_coarse': 16,
         'grid_fine': 4,
         
         # scanner simulation
@@ -30,5 +30,10 @@ Discern3D = {
         'T': 3, # the target number of agents that each voxel block should be stored in.
         'K': 310, # the max number of voxel blocks that each agent can store
         'allocation_discrepancy_threshold': 2,
+        'agent_ips': [('127.0.0.1', 9000),] 
+                        # ('127.0.0.1', 9001), 
+                        # ('127.0.0.1', 9002),
+                        # ('127.0.0.1', 9003), 
+                        # ('127.0.0.1', 9004)]
     },
 }
