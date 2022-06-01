@@ -4,96 +4,311 @@ from scipy.spatial.distance import minkowski
 from datetime import datetime
 import time
 from vis import vis_voxel_grid
+import queue
+import threading
+
+from xmlrpc.server import SimpleXMLRPCServer
+from xmlrpc.server import SimpleXMLRPCRequestHandler
+import xmlrpc
+
+
+# Restrict to a particular path.
+class RequestHandler(SimpleXMLRPCRequestHandler):
+    rpc_paths = ('/RPC2',)
+
+
 
 class Agent(object):
-    def __init__(self, kwargs):
+    def __init__(self, agent_idx, kwargs):
         self.grid_coarse = kwargs['grid_coarse']
         self.grid_fine = kwargs['grid_fine']
 
         self.num_points_view = kwargs['num_points_view']
         self.num_points_scan = kwargs['num_points_scan']
-        
-        # self.repn_coarse = np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)
-        # self.repn_fine = [[[None for i in range(kwargs['grid_coarse'])] \
-        #                   for j in range(kwargs['grid_coarse'])] \
-        #                   for k in range(kwargs['grid_coarse'])]
 
+        # agent args
+        self.T = kwargs['T']
+        self.K = kwargs['K']
+        self.agent_ips = kwargs['agent_ips']
+        self.agent_ids = kwargs['agent_ids']
+        self.my_idx = agent_idx
+        self.my_id = self.agent_ids[agent_idx]
+        self.my_ip = self.agent_ips[agent_idx]
+
+        # final course and fine representations
         self.repn_coarse = [np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)]
         self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
         self.repn_fine = []
+        self.priority_list = {}
+        self.priority_list_timesteps = {}
+        self.priority_list_votes = {}
+        self.priority_list_locks = [[[threading.Condition() for i in range(self.grid_coarse)] for j in range(self.grid_coarse)] for k in range(self.grid_coarse)]
 
-        # for the data...
-        self.data = {}
-        self.T = kwargs['T']
-        self.K = kwargs['K']
-        self.allocation_discrepancy_threshold = kwargs['allocation_discrepancy_threshold']
+        # Queue and temporary state for handling fine representation
+        self.received_packets = queue.Queue()
+        self.temp_repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
+        self.temp_repn_fine = []
+
+        # Thread management
+        self.threads_lock = threading.RLock()
+        self.threads = []
 
 
     def run(self, scan_hz=1.0):
         # step 1: init listening server loop
 
-        # step 1.5: init high-res protocol loop
+        # step 2: init gossiping loop
 
-        # step 2: initialize course-rep get-scene loop
+        # step 3: init high-res update loop
 
-        # step 3: scan data
+        # step 4: initialize low-res get loop
+
+        # step 5: init scan loop
         pass
 
 
-    def scan_loop(self, shape_data, view, view_transition, finished_callback, scan_hz=20, vis=False):
-        timestep = 0
+    # =================================================================
+    # ====================== BUILD RPC PROTOCOL ======================
+    # =================================================================
+    def init_server(self):
+        with SimpleXMLRPCServer((self.my_ip[0], self.my_ip[1]), requestHandler=RequestHandler) as server:
+            server.register_introspection_functions()
+            server.register_function(self.get_rpc, 'get')
+            server.register_function(self.get_all_rpc, 'get_all')
+            server.register_function(self.get_priority_list_rpc, 'get_priority_list')
+            server.register_function(self.update_priority_list_rpc, 'update_priority_list')
+            server.register_function(self.update_rpc, 'update')
+            server.serve_forever()
+
+    def get_rpc(self, course_idx):
+        return self.repn_coarse[course_idx[0], course_idx[1], course_idx[2]]
+
+    def get_all_rpc(self):
+        return self.repn_coarse
+
+    def update_rpc(self, course_idx, packet_id, fine_scan, timestep):
+        self.received_packets.put((course_idx, packet_id, fine_scan, timestep))
+        return "success"
+
+    def get_priority_list_rpc(self, coarse_idx):
+        return self.priority_list[coarse_idx]
+
+    def update_priority_list_rpc(self, coarse_idx, update):
+        self.priority_list[coarse_idx] = update
+        return "success"
+
+    # =================================================================
+    # ================== COURSE REPRESENTATION GET ====================
+    # =================================================================
+    def get_loop(self, finished_callback, freq=1.0):
         while not finished_callback():
-            # scan data
-            course_scan, course_idxs, fine_scans = self.scan(shape_data, view)
+            for i, agent_ip in self.agent_ips:
+                if i == self.my_idx:
+                    continue
+                s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                coarse_grid = s.get_all()
+                self.repn_coarse |= coarse_grid
+            time.sleep(1/freq)
 
-            # update global coarse representation
-            self.repn_coarse.append(course_scan)
+    # =================================================================
+    # ================== DYNAMIC PRIORITY LIST GOSSIP =================
+    # =================================================================
+    def gossip_loop(self, finished_callback, freq):
+        while not finished_callback():
+            observed_voxel_ids = grid2idx(self.grid_coarse)
+            for voxel_id in observed_voxel_ids:
+                for ip_address in self.agent_ips:
+                    self.sync_priority_lists(ip_address, voxel_id)
 
-            # update global fine representation
-            for i, course_idx in enumerate(course_idxs):
-                this_fine_idx = self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
-                if this_fine_idx == -1:
-                    self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]] = len(self.repn_fine)
-                    self.repn_fine.append([fine_scans[i]])
-                else:
-                    self.repn_fine[this_fine_idx].append(fine_scans[i])
+            time.sleep(1/freq)
 
-            # update view
-            view = view_transition(view)
-            time.sleep(1/scan_hz)
-            print(timestep)
+    def sync_priority_lists(self, ip_address, voxel_id):
+        # todo: perform a sync-priority-list operation with them
+        # todo: notify voxel lock by calling .notify_all() if anything changes
+        pass
 
-            if vis:
-                vis_voxel_grid(self.fine_voxel_grid)
-            timestep += 1
-
-    def setup(self, kwargs):
-        """ A function for setting up the ID's
+    # =================================================================
+    # ================== FINE REPRESENTATION UPDATE ===================
+    # =================================================================
+    def update_loop(self, finished_callback):
         """
-        self.id = kwargs['id']
-        self.id2agents = kwargs['id2agents']
-        self.other_ids = [el for el in self.id2agents if el!=self.id]
+        Listens to shared queue and spawns appropriate `update` calls
+        :return:
+        """
 
-        self.vox_ids = kwargs['voxel_ids']
-        self.vox2agent = {el: [] for el in self.vox_ids}
+        while not finished_callback():
+            received_packet = self.received_packets.get(block=True)
+            thread = threading.Thread(target=self.update_packet, args=(received_packet))
+            thread.start()
+
+            self.threads_lock.acquire()
+            self.threads.append(thread)
+            self.threads_lock.release()
+
+    def update_packet(self, data):
+        """
+        Given a data packet, adds it into "temporary" memory and transmits it to the appropriate agents.
+        :param data: Tuple containing course_idx, packet_id, and voxel_data
+        :return:
+        """
+        coarse_idx, packet_id, voxel_data, timestamp = data
+
+        # update our local timestep for the voxel belonging to this packet
+        cur_ts = self.priority_list_timesteps.get(coarse_idx, None)
+        if cur_ts is None or timestamp < cur_ts:
+            # todo: here we should record the received-data timestep and figure out how it fits into
+            #    the priority list timesteps
+            pass
+
+        # update temporary global fine representation
+        fine_idx = self.temp_repn_fine_idx[coarse_idx[0], coarse_idx[1], coarse_idx[2]]
+        if fine_idx == -1:
+            self.temp_repn_fine_idx[coarse_idx[0], coarse_idx[1], coarse_idx[2]] = len(self.temp_repn_fine)  # todo: make thread safe!!
+            self.temp_repn_fine.append({packet_id: voxel_data})
+        else:
+            self.temp_repn_fine[fine_idx][voxel_data] = packet_id
+
+        # enter a loop that sends the data to appropriate agents
+        thread = threading.Thread(target=self.update_packet_replication, args=(coarse_idx, packet_id))
+        thread.start()
+        self.threads.append(thread)
+
+    def update_packet_replication(self, course_idx, packet_id):
+        """
+        Given the course-grid index and packet-id, this method appropriately transmits the voxel data-packet stored
+        in self.temp_repn_fine to the appropriate agents. It will loop until it is confirmed that the data is sent
+        to the K higher-priority agents, or until it can *confirm that it is in the top K agents.
+
+        :param course_idx: tuple of (i,j,k) in the course grid
+        :param packet_id: unique int identifier of this data packet
+        :return: None
+        """
+        # iterate until our priority list converges
+        transmitted_history = {self.my_ip}
+        while not len(self.priority_list_votes[course_idx]) == len(self.agent_ids):
+            # acquire coarse-grid lock
+            this_lock = self.priority_list_locks[course_idx[0]][course_idx[1]][course_idx[2]]
+            this_lock.acquire()
+
+            # transmit to all agents in current priority list
+            for agent_ip in self.priority_list[course_idx][:self.K]:
+                if agent_ip in transmitted_history:
+                    continue
+                success = self.transmit_data(agent_ip, course_idx, packet_id)
+                if success:
+                    transmitted_history.add(agent_ip)
+
+            # sleep until priority list is updated
+            this_lock.wait()
+            this_lock.release()
+
+        # once we break out of the loop, we know we have reached consensus on priority list
+        fully_replicated = set(self.priority_list[course_idx][:self.K]).issubset(transmitted_history)
+        while not fully_replicated:
+            for agent_ip in self.priority_list[course_idx][:self.K]:
+                if agent_ip in transmitted_history:
+                    continue
+                success = self.transmit_data(agent_ip, course_idx, packet_id)
+                if success:
+                    transmitted_history.add(agent_ip)
+            fully_replicated = set(self.priority_list[course_idx][:self.K]).issubset(transmitted_history)
+
+        # if we are in the priority list, add the voxel to storage
+        temp_fine_idx = self.temp_repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
+        voxel_data = self.temp_repn_fine[temp_fine_idx][packet_id]
+
+        if self.my_ip in self.priority_list[course_idx][:self.K]:
+            fine_idx = self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]]
+            if fine_idx == -1:
+                self.repn_fine_idx[course_idx[0], course_idx[1], course_idx[2]] = len(self.temp_repn_fine)  # todo: make thread safe!!
+                self.repn_fine.append(voxel_data)
+            else:
+                self.temp_repn_fine[fine_idx] |= voxel_data
+
+        # remove temporary storage of high-res voxel data
+        del self.temp_repn_fine[temp_fine_idx][packet_id]
+
+       #  vox_id = data['vox_id']
+       #  vox_hash = datetime.now()  # idk, something that can be sorted by time.
+       #
+       #  if len(self.vox2agent[vox_id]) < self.K:
+       #      # here, we have a decision to make. we can either pass this data to another agent,
+       #      # or keep it for ourselves.
+       #      a2v = self.get_agent2vox()
+       #      cankeep, send_candidates = self.cankeep(self, vox_id, a2v)
+       #
+       #      # if we can get away with not sending it AND the data can fit in memory...
+       #      if cankeep and len(self.data) < self.T:
+       #          self.data[vox_id] = data['pointcloud']
+       #          self.vox2agent[vox_id].append((self.id, vox_hash))
+       #
+       #          # now let's notify the other agents of this change...
+       #          for agent_id in self.other_ids:
+       #              other = self.id2agents[
+       #                  agent_id]  # some function to return the actual agent object, or get access to some port...
+       #              other.update("update_vox2agent", {'vox2agent': self.vox2agent})
+       #
+       #      # otherwise...
+       #      else:
+       #          # this means the memory of this agent is  full currently, so
+       #          # let's pass this onto another agent. Let's pick a random agent
+       #          # from send_candidates
+       #          send_to = np.random.choice(send_candidates)
+       #
+       #          # then, do a quick sync with the other agent. Do they indeed have
+       #          # enough space to store the data you're about to send them?
+       #          # TODO. eugh.
+       #
+       #          # send them. TODO What should it do if it fails?
+       #          self.id2agents[send_to].update(method, data)
+       #
+       #      for agent_id in self.other_ids:
+       #          other = self.id2agents[
+       #              agent_id]  # some function to return the actual agent object, or get access to some port...
+       #          other.update("update_vox2agent", {'vox2agent': self.vox2agent})
+       #
+       # # reconcile the vox2agent from another agent to this...
+       #  for key in self.vox2agent:
+       #      other_vox2agent = data['vox2agent']
+       #      mine = self.vox2agent[key]
+       #      yours = other_vox2agent[key]
+       #      union_agents = list(set(mine).union(set(yours)))
+       #      # if the union <= length K, we don't have a problem... but...
+       #      if len(union_agents) >= self.K:
+       #          # we have to merge them, but in a way that will be consistent.
+       #          merged = sorted(union_agents,
+       #                          key=lambda x: x[1]) # we sort by the timestamp
+       #          merged_topK = merged[:self.K]
+       #          merged_remove = merged[self.K:]
+       #
+       #          # now of the ones that are going to be removed,
+       #          # check if this agent belongs in there. Remove the
+       #          # data if necessary.
+       #          for el in merged_remove:
+       #              if el[0] == self.id:
+       #                  del self.data[key] # clear the data
+       #
+       #          self.vox2agent[key] = merged_topK
+       #      else:  # we good. let' just merge it.
+       #          self.vox2agent[key] = union_agents
 
     def get_agent2vox(self):
         agent2vox = {el: [] for el in self.id2agents}
         for vox_id, agent_list in self.vox2agent:
-            for el in agent_list: 
+            for el in agent_list:
                 agent_id = el[0]
                 agent2vox[agent_id].append(vox_id)
         return agent2vox
 
     def cankeep(self, vox_id, a2v):
-        """ 
+        """
         Args:
           vox_id: voxel id string.
           a2v: a mapping that maps each AID to a list of voxel id's.
         Returns:
-          canKeep: True means that keeping the data onboard does not jeopardize 
+          canKeep: True means that keeping the data onboard does not jeopardize
             crossing the assignment discrepancy threshold
-          send_candidates: candidates that, if the agent chooses to send, are the most "beneficial" to send to 
+          send_candidates: candidates that, if the agent chooses to send, are the most "beneficial" to send to
             ( the ones allocated to the least number of voxels. )
         """
         mustsend = False
@@ -103,88 +318,41 @@ class Agent(object):
         vox_current_holders = [el[0] for el in self.vox2agent[vox_id]]
         for el in [aid for aid in self.id2agents if aid not in vox_current_holders]:
             candidate_agent_prior_commitment[el] = len(a2v[vox_id])
-    
+
         min_commitment = min(list(candidate_agent_prior_commitment.values()))
-        send_candidates = [key for key, value in candidate_agent_prior_commitment.items() 
+        send_candidates = [key for key, value in candidate_agent_prior_commitment.items()
                            if value == min_commitment and key != self.id]
         if self.id in candidate_agent_prior_commitment:
             current_agent_commitment = candidate_agent_prior_commitment[self.id]
             mustsend = (current_agent_commitment - min_commitment) >= self.allocation_discrepancy_threshold
         else:
             mustsend = True
-        return (not mustsend), send_candidates 
+        return (not mustsend), send_candidates
 
-    def update(self, method, data):
-        if method == 'scanned':
-            # this means that new data is scanned, and the agent needs to decide
-            # what to do with that scan.
-            vox_id = data['vox_id']
-            vox_hash = datetime.now() # idk, something that can be sorted by time.
+    # =================================================================
+    # ==================== SCANNING FUNCTIONALITY =====================
+    # =================================================================
+    def scan_loop(self, shape_data, view, view_transition, finished_callback, scan_hz=20, vis=False):
+        jj = 0
+        while not finished_callback():
+            # scan data
+            course_scan, course_idxs, fine_scans = self.scan(shape_data, view)
 
-            if len(self.vox2agent[vox_id]) < self.K:
-                # here, we have a decision to make. we can either pass this data to another agent, 
-                # or keep it for ourselves. 
-                a2v = self.get_agent2vox()
-                cankeep, send_candidates = self.cankeep(self, vox_id, a2v)
-                
-                # if we can get away with not sending it AND the data can fit in memory...
-                if cankeep and len(self.data) < self.T:
-                    self.data[vox_id] = data['pointcloud']
-                    self.vox2agent[vox_id].append((self.id, vox_hash))
+            # update global coarse representation
+            self.repn_coarse.append(course_scan)
 
-                    # now let's notify the other agents of this change...
-                    for agent_id in self.other_ids:
-                        other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
-                        other.update("update_vox2agent", {'vox2agent': self.vox2agent})
+            # add fine-scan packets to queue
+            for i, course_idx in enumerate(course_idxs):
+                packet_id = time.time_ns() + hash(str(course_idx))
+                self.received_packets.put((course_idx, packet_id, fine_scans[i], time.time()))
 
-                # otherwise...
-                else:
-                    # this means the memory of this agent is  full currently, so
-                    # let's pass this onto another agent. Let's pick a random agent 
-                    # from send_candidates
-                    send_to = np.random.choice(send_candidates)
+            # update view
+            view = view_transition(view)
+            time.sleep(1/scan_hz)
 
-                    # then, do a quick sync with the other agent. Do they indeed have
-                    # enough space to store the data you're about to send them?
-                    # TODO. eugh. 
-
-                    # send them. TODO What should it do if it fails?
-                    self.id2agents[send_to].update(method, data)
-    
-                for agent_id in self.other_ids:
-                    other = self.id2agents[agent_id] # some function to return the actual agent object, or get access to some port...
-                    other.update("update_vox2agent", {'vox2agent': self.vox2agent})
-
-            else:
-                print("voxel seems to be already covered by K agents -- tossing!")
-            
-           
-        elif method == 'update_vox2agent':
-            # reconcile the vox2agent from another agent to this...
-            for key in self.vox2agent:
-                other_vox2agent = data['vox2agent']
-                mine = self.vox2agent[key]
-                yours = other_vox2agent[key]
-                union_agents = list(set(mine).union(set(yours)))
-                # if the union <= length K, we don't have a problem... but...
-                if len(union_agents) >= self.K:
-                    # we have to merge them, but in a way that will be consistent.
-                    merged = sorted(union_agents,
-                                    key=lambda x: x[1]) # we sort by the timestamp
-                    merged_topK = merged[:self.K]
-                    merged_remove = merged[self.K:]
-
-                    # now of the ones that are going to be removed,
-                    # check if this agent belongs in there. Remove the
-                    # data if necessary.
-                    for el in merged_remove:
-                        if el[0] == self.id:
-                            del self.data[key] # clear the data
-                    
-                    self.vox2agent[key] = merged_topK
-                else: # we good. let' just merge it.
-                    self.vox2agent[key] = union_agents
-
+            if vis:
+                vis_voxel_grid(self.fine_voxel_grid)
+            jj += 1
   
     def scan(self, shape_data, view):
         '''
