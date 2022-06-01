@@ -30,18 +30,17 @@ class Agent(object):
         self.T = kwargs['T']
         self.K = kwargs['K']
         self.agent_ips = kwargs['agent_ips']
-        self.agent_ids = kwargs['agent_ids']
         self.my_idx = agent_idx
-        self.my_id = self.agent_ids[agent_idx]
         self.my_ip = self.agent_ips[agent_idx]
 
         # final course and fine representations
         self.repn_coarse = [np.zeros((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=bool)]
         self.repn_fine_idx = -np.ones((kwargs['grid_coarse'], kwargs['grid_coarse'], kwargs['grid_coarse']), dtype=int)
         self.repn_fine = []
-        self.priority_list = {}
-        self.priority_list_timesteps = {}
-        self.priority_list_votes = {}
+
+        # rep for building a dynamic priority list
+        self.gossip_queue = queue.Queue()
+        self.priority_list_timesteps = [[[[np.inf for a in range(len(self.agent_ips))] for i in range(self.grid_coarse**3)] for j in range(self.grid_coarse**3)] for k in range(self.grid_coarse**3)]
         self.priority_list_locks = [[[threading.Condition() for i in range(self.grid_coarse)] for j in range(self.grid_coarse)] for k in range(self.grid_coarse)]
 
         # Queue and temporary state for handling fine representation
@@ -86,7 +85,8 @@ class Agent(object):
     def get_all_rpc(self):
         return self.repn_coarse
 
-    def update_rpc(self, course_idx, packet_id, fine_scan, timestep):
+    def update_rpc(self, course_idx, packet_id, fine_scan):
+        timestep = time.time()
         self.received_packets.put((course_idx, packet_id, fine_scan, timestep))
         return "success"
 
@@ -114,18 +114,55 @@ class Agent(object):
     # ================== DYNAMIC PRIORITY LIST GOSSIP =================
     # =================================================================
     def gossip_loop(self, finished_callback, freq):
+        """
+        Iteratively communicates with all other agents. Adds any timestamp-observation updates to our priority queue.
+        :param finished_callback:
+        :param freq:
+        :return:
+        """
         while not finished_callback():
             observed_voxel_ids = grid2idx(self.grid_coarse)
             for voxel_id in observed_voxel_ids:
                 for ip_address in self.agent_ips:
-                    self.sync_priority_lists(ip_address, voxel_id)
-
+                    s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                    their_priority_list_tstamps = s.get_priority_list(voxel_id)
+                    our_priority_list_tstamps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]]
+                    for i, tstamp in their_priority_list_tstamps:
+                        if tstamp < our_priority_list_tstamps[i]:
+                            self.gossip_queue.put((voxel_id, tstamp, self.agent_ips[i]))
             time.sleep(1/freq)
 
-    def sync_priority_lists(self, ip_address, voxel_id):
-        # todo: perform a sync-priority-list operation with them
-        # todo: notify voxel lock by calling .notify_all() if anything changes
-        pass
+    def update_our_priority_list(self, finished_callback):
+        # get priority list of this agent and us
+        while not finished_callback():
+            priority_queue_update = self.gossip_queue.get(block=True)
+            voxel_id, new_tstep, agent_id = priority_queue_update
+            agent_idx = agent_id  # todo: fix me!
+
+            # get current and updated set of agent timesteps
+            old_priority_timesteps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]].copy()
+            self.priority_list_timesteps[voxel_id[0] * self.grid_coarse ** 2 + voxel_id[1] * self.grid_coarse + voxel_id[2]][agent_idx] = new_tstep
+            new_priority_timesteps = self.priority_list_timesteps[voxel_id[0]*self.grid_coarse**2 + voxel_id[1]*self.grid_coarse + voxel_id[2]]
+
+            # ------ check if this affects our top-k agents
+            # check 1: we added a new agent to the initially lacking priority list
+            voxel_lock = self.priority_list_locks[voxel_id[0], voxel_id[1], voxel_id[2]]
+            voxel_lock.notifyAll()
+
+            # active_agents_now = np.sum(np.isfinite(new_priority_timesteps))
+            # active_agents_before = np.sum(np.isfinite(old_priority_timesteps))
+            # added_agent = active_agents_now <= self.K and active_agents_now > active_agents_before
+            # if added_agent:
+            #     voxel_lock = self.priority_list_locks[voxel_id[0], voxel_id[1], voxel_id[2]]
+            #     voxel_lock.notifyAll()
+            #
+            # # check 2: we changed the order of the top-K agents in the priority list
+            # topk_before = np.argsort(old_priority_timesteps)[:self.K]
+            # topk_now = np.argsort(new_priority_timesteps)[:self.K]
+            # if not np.all(topk_now == topk_before):
+            #     voxel_lock = self.priority_list_locks[voxel_id[0], voxel_id[1], voxel_id[2]]
+            #     voxel_lock.notifyAll()
+
 
     # =================================================================
     # ================== FINE REPRESENTATION UPDATE ===================
@@ -153,12 +190,10 @@ class Agent(object):
         """
         coarse_idx, packet_id, voxel_data, timestamp = data
 
-        # update our local timestep for the voxel belonging to this packet
-        cur_ts = self.priority_list_timesteps.get(coarse_idx, None)
-        if cur_ts is None or timestamp < cur_ts:
-            # todo: here we should record the received-data timestep and figure out how it fits into
-            #    the priority list timesteps
-            pass
+        # we just received a new voxel/timestep --> add it to our gossip-queue to notify of priority-list updates
+        cur_timestep = self.priority_list_timesteps[coarse_idx[0]*self.grid_coarse**2 + coarse_idx[1]*self.grid_coarse + coarse_idx[2]]
+        if timestamp < cur_timestep:
+            self.gossip_queue.put((coarse_idx, timestamp, self.my_ip))
 
         # update temporary global fine representation
         fine_idx = self.temp_repn_fine_idx[coarse_idx[0], coarse_idx[1], coarse_idx[2]]
@@ -185,14 +220,17 @@ class Agent(object):
         """
         # iterate until our priority list converges
         transmitted_history = {self.my_ip}
-        while not len(self.priority_list_votes[course_idx]) == len(self.agent_ids):
+        while np.any(np.isinf(self.priority_list_timesteps[course_idx[0]*self.grid_coarse**2 + course_idx[1]*self.grid_coarse + course_idx[2]])):
             # acquire coarse-grid lock
             this_lock = self.priority_list_locks[course_idx[0]][course_idx[1]][course_idx[2]]
             this_lock.acquire()
 
             # transmit to all agents in current priority list
-            for agent_ip in self.priority_list[course_idx][:self.K]:
-                if agent_ip in transmitted_history:
+            cur_priority_tsteps = self.priority_list_timesteps[course_idx[0] * self.grid_coarse ** 2 + course_idx[1] * self.grid_coarse + course_idx[2]]
+            cur_topk_agents = np.argsort(cur_priority_tsteps)[:self.K]
+            for i in cur_topk_agents:
+                agent_ip = self.agent_ips[i]
+                if agent_ip in transmitted_history or np.isinf(cur_priority_tsteps[i]):
                     continue
                 success = self.transmit_data(agent_ip, course_idx, packet_id)
                 if success:
