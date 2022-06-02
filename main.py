@@ -5,6 +5,7 @@ import numpy as np
 import configs
 import dataset
 import agent
+from network import Router
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some integers.')
@@ -19,7 +20,13 @@ if __name__ == '__main__':
     
     shapenet = dataset.ShapeNetPart(metadata['dataset_kwargs'])
     shape_data = shapenet[args.shape_idx][0]
-    agents = [agent.Agent(i, metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
+    
+    UniversalRouter = Router(metadata['agent_kwargs']['agent_ips'],
+                            intragroup_link_failure_prob=metadata['simulation']['intragroup_link_failure_prob'], 
+                            max_partitions=metadata['simulation']['max_partitions'], 
+                            refresh_hz=metadata['simulation']['refresh_hz'])
+
+    agents = [agent.Agent(UniversalRouter, i, metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
 
     if not os.path.isdir( metadata['agent_kwargs']['output_dir'] ):
         os.makedirs(metadata['agent_kwargs']['output_dir'])

@@ -15,8 +15,9 @@ Discern3D = {
         'partition': 'trainval',
         'num_points': 2048,
     },
-
-        
+    'simulation': {'intragroup_link_failure_prob': 0.0, 
+                   'max_partitions': 1, 
+                   'refresh_hz': 1.0},
     'num_agents': 3,
     'agent_kwargs': {
         # scene representation
