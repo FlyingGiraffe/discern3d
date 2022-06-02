@@ -2,3 +2,4 @@ numpy
 torch>=1.4.0
 sklearn
 matplotlib
+dill

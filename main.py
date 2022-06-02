@@ -21,6 +21,9 @@ if __name__ == '__main__':
     shape_data = shapenet[args.shape_idx][0]
     agents = [agent.Agent(i, metadata['agent_kwargs']) for i in range(metadata['num_agents'])]
 
+    if not os.path.isdir( metadata['agent_kwargs']['output_dir'] ):
+        os.makedirs(metadata['agent_kwargs']['output_dir'])
+    
     # per-agent setup.
     # voxel_ids = list(range(metadata['agent_kwargs']['grid_coarse']**3))
     # ids2agents = {}

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import minkowski
@@ -10,16 +11,20 @@ import threading
 from xmlrpc.server import SimpleXMLRPCServer
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 import xmlrpc
+import dill as pickle
 
+from network import Router
 
 # Restrict to a particular path.
 class RequestHandler(SimpleXMLRPCRequestHandler):
     rpc_paths = ('/RPC2',)
 
-
+UniversalRouter = Router()
 
 class Agent(object):
     def __init__(self, agent_idx, kwargs):
+        self.output_dir = kwargs['output_dir']
+
         self.grid_coarse = kwargs['grid_coarse']
         self.grid_fine = kwargs['grid_fine']
 
@@ -161,7 +166,8 @@ class Agent(object):
                 if i == self.my_idx:
                     continue
                 try:
-                    s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                    # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                    s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
                     coarse_grid = s.get_all()
                 except (ConnectionRefusedError, ConnectionResetError) as e:
                     continue
@@ -172,7 +178,18 @@ class Agent(object):
             # print("Agent {0} Number of Fine Voxels {1}".format(self.my_idx, np.sum(self.fine_voxel_grid)))
             # vis_voxel_grid(self.fine_voxel_grid)
 
+            voxel_data = {'coarse': self.repn_coarse}
+            self.save_voxel(voxel_data, self.my_idx, time.time())
+
             time.sleep(1/freq)
+
+    def save_voxel(self, voxel_data, my_idx, time):
+        save_dir = self.output_dir
+        save_file = 'agent{}_{}.pkl'.format(my_idx, time)
+        save_loc = os.path.join(save_dir, save_file)
+        print('Saving in {}'.format(save_loc))
+        with open(save_loc, 'wb') as f:
+            pickle.dump(voxel_data, f)
 
     # =================================================================
     # ================== DYNAMIC PRIORITY LIST GOSSIP =================
@@ -189,9 +206,9 @@ class Agent(object):
             observed_voxel_ids = grid2idx(self.repn_coarse)
             for voxel_id in observed_voxel_ids:
                 for ip_address in self.agent_ips:
-                    
                     try:
-                        s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                        # xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                        s = UniversalRouter.attempt_ServerProxy(self.my_ip, ip_address) 
                         their_priority_list_tstamps = s.get_priority_list(voxel_id.tolist())
                     except (ConnectionRefusedError, ConnectionResetError) as e:
                         continue
@@ -363,8 +380,10 @@ class Agent(object):
 
     def transmit_data(self, agent_ip, course_idx, packet_id):
         try:
-            s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
-            fine_scan = self.temp_repn_fine[course_idx[0]][course_idx[1]][course_idx[2]][packet_id]
+            # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+            s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
+            fine_scan_idx = self.temp_repn_fine_idx[course_idx[0]][course_idx[1]][course_idx[2]]
+            fine_scan = self.temp_repn_fine[fine_scan_idx][packet_id]
             res = s.update(course_idx, packet_id, fine_scan.tolist())
         except (ConnectionRefusedError, ConnectionResetError) as e:  # TODO add error types here
             return False
@@ -448,15 +467,15 @@ class Agent(object):
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
     # NOTE: following for sidestepping the bug from the uncommented code below
-    # return np.random.rand(num_subsampled_points, 3)
+    return np.random.rand(num_subsampled_points, 3)
     
-    num_points = pointcloud.shape[0]
-    nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
-                             metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
+    # num_points = pointcloud.shape[0]
+    # nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
+    #                          metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
     
-    print("{0}")
-    idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
-    return pointcloud[idx, :]
+    # print("{0}")
+    # idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
+    # return pointcloud[idx, :]
 
 
 def grid2idx(grid):
