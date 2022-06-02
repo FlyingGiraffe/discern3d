@@ -13,12 +13,13 @@ from xmlrpc.server import SimpleXMLRPCRequestHandler
 import xmlrpc
 import dill as pickle
 
+from network import Router
 
 # Restrict to a particular path.
 class RequestHandler(SimpleXMLRPCRequestHandler):
     rpc_paths = ('/RPC2',)
 
-
+UniversalRouter = Router()
 
 class Agent(object):
     def __init__(self, agent_idx, kwargs):
@@ -158,7 +159,8 @@ class Agent(object):
                 if i == self.my_idx:
                     continue
                 try:
-                    s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                    # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+                    s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
                     coarse_grid = s.get_all()
                 except ConnectionRefusedError as e:
                     continue
@@ -196,9 +198,9 @@ class Agent(object):
             observed_voxel_ids = grid2idx(self.repn_coarse)
             for voxel_id in observed_voxel_ids:
                 for ip_address in self.agent_ips:
-                    
                     try:
-                        s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                        # xmlrpc.client.ServerProxy('http://{0}:{1}'.format(ip_address[0], ip_address[1]))
+                        s = UniversalRouter.attempt_ServerProxy(self.my_ip, ip_address) 
                         their_priority_list_tstamps = s.get_priority_list(voxel_id.tolist())
                     except ConnectionRefusedError as e:
                         continue
@@ -290,7 +292,8 @@ class Agent(object):
 
     def transmit_data(self, agent_ip, course_idx, packet_id):    
         try:
-            s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+            # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
+            s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
             fine_scan_idx = self.temp_repn_fine_idx[course_idx[0]][course_idx[1]][course_idx[2]]
             fine_scan = self.temp_repn_fine[fine_scan_idx][packet_id]
             res = s.update(course_idx, packet_id, fine_scan.tolist())
