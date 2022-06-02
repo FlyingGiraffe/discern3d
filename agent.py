@@ -380,7 +380,7 @@ class Agent(object):
     def transmit_data(self, agent_ip, course_idx, packet_id):
         try:
             # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
-            s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
+            s = self.router.attempt_ServerProxy(self.my_ip, agent_ip)
             fine_scan = self.temp_repn_fine[course_idx[0]][course_idx[1]][course_idx[2]][packet_id]
             res = s.update(course_idx, packet_id, fine_scan.tolist())
         except (ConnectionRefusedError, ConnectionResetError) as e:  # TODO add error types here

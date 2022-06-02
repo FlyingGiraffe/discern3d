@@ -40,7 +40,7 @@ class Router(object):
         # allow them to message pass.
         
         if self.is_connected(from_ip, to_ip):
-            # print('connection permitted between {} and {}'.format(from_ip, to_ip))
+            print('connection permitted between {} and {}'.format(from_ip, to_ip))
             s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(to_ip[0], to_ip[1]))
             return s
 
