@@ -3,3 +3,4 @@ paths.json
 *.ipynb_checkpoints
 *.out
 .idea/
+tmp_viz/
