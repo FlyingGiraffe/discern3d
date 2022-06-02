@@ -33,7 +33,7 @@ if __name__ == '__main__':
     
     viewpoint_per_agent = np.random.randn(len(agents),3)
     viewpoint_per_agent = viewpoint_per_agent / np.linalg.norm(viewpoint_per_agent, axis=1, keepdims=True)
-    identity_transition = lambda x: x 
+    identity_transition = lambda x: np.random.randn(len(agents),3)
     finished_callback = lambda: False
 
 
