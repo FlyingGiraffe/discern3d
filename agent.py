@@ -465,15 +465,14 @@ class Agent(object):
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
     # NOTE: following for sidestepping the bug from the uncommented code below
-    return np.random.rand(num_subsampled_points, 3)
+    # return np.random.rand(num_subsampled_points, 3)
     
-    # num_points = pointcloud.shape[0]
-    # nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
-    #                          metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
+    num_points = pointcloud.shape[0]
+    nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
+                             metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
     
-    # print("{0}")
-    # idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
-    # return pointcloud[idx, :]
+    idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
+    return pointcloud[idx, :]
 
 
 def grid2idx(grid):
