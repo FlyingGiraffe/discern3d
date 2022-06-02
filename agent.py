@@ -186,7 +186,7 @@ class Agent(object):
         save_dir = self.output_dir
         save_file = 'agent{}_{}.pkl'.format(my_idx, time)
         save_loc = os.path.join(save_dir, save_file)
-        print('Saving in {}'.format(save_loc))
+        # print('Saving in {}'.format(save_loc))
         with open(save_loc, 'wb') as f:
             pickle.dump(voxel_data, f)
 
