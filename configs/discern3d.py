@@ -16,7 +16,7 @@ Discern3D = {
         'num_points': 2048,
     },
     'simulation': {'intragroup_link_failure_prob': 0.0, 
-                   'max_partitions': 1, 
+                   'max_partitions': 2, 
                    'refresh_hz': 1.0},
     'num_agents': 3,
     'agent_kwargs': {
