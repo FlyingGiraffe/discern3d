@@ -15,7 +15,8 @@ Discern3D = {
         'partition': 'trainval',
         'num_points': 2048,
     },
-    
+
+        
     'num_agents': 3,
     'agent_kwargs': {
         # scene representation
@@ -30,6 +31,7 @@ Discern3D = {
         'T': 3, # the target number of agents that each voxel block should be stored in.
         'K': 2, # the max number of voxel blocks that each agent can store
         'allocation_discrepancy_threshold': 2,
+        'output_dir': 'tmp_viz',
         'agent_ips': [('127.0.0.1', 9000),
                         ('127.0.0.1', 9001),
                         ('127.0.0.1', 9002)]

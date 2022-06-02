@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import minkowski
@@ -10,6 +11,7 @@ import threading
 from xmlrpc.server import SimpleXMLRPCServer
 from xmlrpc.server import SimpleXMLRPCRequestHandler
 import xmlrpc
+import dill as pickle
 
 
 # Restrict to a particular path.
@@ -20,6 +22,8 @@ class RequestHandler(SimpleXMLRPCRequestHandler):
 
 class Agent(object):
     def __init__(self, agent_idx, kwargs):
+        self.output_dir = kwargs['output_dir']
+
         self.grid_coarse = kwargs['grid_coarse']
         self.grid_fine = kwargs['grid_fine']
 
@@ -164,7 +168,18 @@ class Agent(object):
             # print('Visualization')
             # vis_voxel_grid(self.repn_coarse) 
 
+            voxel_data = {'coarse': self.repn_coarse}
+            self.save_voxel(voxel_data, self.my_idx, time.time())
+
             time.sleep(1/freq)
+
+    def save_voxel(self, voxel_data, my_idx, time):
+        save_dir = self.output_dir
+        save_file = 'agent{}_{}.pkl'.format(my_idx, time)
+        save_loc = os.path.join(save_dir, save_file)
+        print('Saving in {}'.format(save_loc))
+        with open(save_loc, 'wb') as f:
+            pickle.dump(voxel_data, f)
 
     # =================================================================
     # ================== DYNAMIC PRIORITY LIST GOSSIP =================
@@ -561,15 +576,15 @@ class Agent(object):
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
     # NOTE: following for sidestepping the bug from the uncommented code below
-    # return np.random.rand(num_subsampled_points, 3)
+    return np.random.rand(num_subsampled_points, 3)
     
-    num_points = pointcloud.shape[0]
-    nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
-                             metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
+    # num_points = pointcloud.shape[0]
+    # nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
+    #                          metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
     
-    print("{0}")
-    idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
-    return pointcloud[idx, :]
+    # print("{0}")
+    # idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
+    # return pointcloud[idx, :]
 
 
 def grid2idx(grid):
