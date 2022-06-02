@@ -178,7 +178,7 @@ class Agent(object):
             # print("Agent {0} Number of Fine Voxels {1}".format(self.my_idx, np.sum(self.fine_voxel_grid)))
             # vis_voxel_grid(self.fine_voxel_grid)
 
-            voxel_data = {'coarse': self.repn_coarse}
+            voxel_data = {'coarse': self.repn_coarse, 'fine': self.fine_voxel_grid}
             self.save_voxel(voxel_data, self.my_idx, time.time())
 
             time.sleep(1/freq)
@@ -382,8 +382,7 @@ class Agent(object):
         try:
             # s = xmlrpc.client.ServerProxy('http://{0}:{1}'.format(agent_ip[0], agent_ip[1]))
             s = UniversalRouter.attempt_ServerProxy(self.my_ip, agent_ip)
-            fine_scan_idx = self.temp_repn_fine_idx[course_idx[0]][course_idx[1]][course_idx[2]]
-            fine_scan = self.temp_repn_fine[fine_scan_idx][packet_id]
+            fine_scan = self.temp_repn_fine[course_idx[0]][course_idx[1]][course_idx[2]][packet_id]
             res = s.update(course_idx, packet_id, fine_scan.tolist())
         except (ConnectionRefusedError, ConnectionResetError) as e:  # TODO add error types here
             return False
