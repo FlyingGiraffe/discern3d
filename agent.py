@@ -161,9 +161,8 @@ class Agent(object):
                 
                 self.repn_coarse |= np.array(coarse_grid)
 
-
-            print('Visualization')
-            vis_voxel_grid(self.repn_coarse) 
+            # print('Visualization')
+            # vis_voxel_grid(self.repn_coarse) 
 
             time.sleep(1/freq)
 
@@ -561,15 +560,16 @@ class Agent(object):
 
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
-    return np.random.rand(num_subsampled_points, 3)
-    #
-    # num_points = pointcloud.shape[0]
-    # nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
-    #                          metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
-    #
-    # print("{0}")
-    # idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
-    # return pointcloud[idx, :]
+    # NOTE: following for sidestepping the bug from the uncommented code below
+    # return np.random.rand(num_subsampled_points, 3)
+    
+    num_points = pointcloud.shape[0]
+    nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
+                             metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
+    
+    print("{0}")
+    idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
+    return pointcloud[idx, :]
 
 
 def grid2idx(grid):
