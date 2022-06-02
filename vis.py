@@ -1,7 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
-
+import open3d.visualization.rendering as rendering
+import open3d.visualization as vis
 
 def vis_voxel_grid(voxels):
     # set the colors of each object
@@ -22,3 +23,13 @@ def vis_voxel_grid(voxels):
     # ax = plt.figure().add_subplot(projection='3d')
     # ax.voxels(voxels, facecolors=colors, edgecolor='k')
     # plt.show()
+
+    #     material = o3d.visualization.rendering.MaterialRecord()
+    #
+    #     render = rendering.OffscreenRenderer(640, 480)
+    #     render.scene.add_geometry("voxels", o3d_voxel, material)
+    #     render.scene.camera.look_at([0, 0, 0], [0, 1, 1], [0, 0, 1])
+    #     img = render.render_to_image()
+    #     print("=====")
+    #     print(img)
+    #     print(type(img))

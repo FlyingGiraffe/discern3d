@@ -38,5 +38,5 @@ if __name__ == '__main__':
 
 
     for i in range(len(agents)):
-        agents[i].run(shape_data, viewpoint_per_agent[i:i+1], identity_transition)
+        agents[i].run(shape_data, viewpoint_per_agent[i:i+1], identity_transition, gossip_hz=20, update_retry_hz=10)
     # agents[0].scan_loop(shape_data, np.array([[0.0, 0.0, 1.0]]), identity_transition, finished_callback, scan_hz=20, vis=True)
