@@ -24,7 +24,6 @@ class Router(object):
         while True:
             print('repartitioning the network...')
             self.group_number = [random.randint(0, self.max_partitions-1) for _ in range(len(self.agent_ips))]
-            print(self.group_number)
             time.sleep(1/refresh_hz)
 
     def is_connected(self, from_ip, to_ip):
