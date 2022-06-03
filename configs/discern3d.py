@@ -17,16 +17,16 @@ Discern3D = {
     },
     'simulation': {'intragroup_link_failure_prob': 0.0, 
                    'max_partitions': 2, 
-                   'refresh_hz': 1.0},
+                   'refresh_hz': 0.5},
     'num_agents': 3,
     'agent_kwargs': {
         # scene representation
-        'grid_coarse': 32,
-        'grid_fine': 4,
+        'grid_coarse': 4,
+        'grid_fine': 32,  # was 3 x 64!
         
         # scanner simulation
         'num_points_view': 512, # number of points that can be seen from a view
-        'num_points_scan': 16, # subsample points to be the actural scan
+        'num_points_scan': 8, # subsample points to be the actural scan
 
         # for the protocol
         'T': 3, # the target number of agents that each voxel block should be stored in.
@@ -35,8 +35,8 @@ Discern3D = {
         'output_dir': 'tmp_viz',
         'agent_ips': [('127.0.0.1', 9000),
                         ('127.0.0.1', 9001),
-                        ('127.0.0.1', 9002)]
-                        # ('127.0.0.1', 9003)]
+                        ('127.0.0.1', 9002),]
+                        # ('127.0.0.1', 9003),
                         # ('127.0.0.1', 9004)]
     },
 }
