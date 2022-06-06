@@ -5,6 +5,9 @@ import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import os.path as osp
+import torch_geometric.transforms as T
+from torch_geometric.datasets import ModelNet
 
 
 def load_data_cls(path, partition):
@@ -65,6 +68,23 @@ def rotate_pointcloud(pointcloud):
     rotation_matrix = np.array([[np.cos(theta), -np.sin(theta)],[np.sin(theta), np.cos(theta)]])
     pointcloud[:,[0,2]] = pointcloud[:,[0,2]].dot(rotation_matrix) # random rotation (x,z)
     return pointcloud
+
+
+class ModelNet10HighRes(Dataset):
+
+    def __init__(self, kwargs):
+        path = kwargs['path']
+        pre_transform, transform = T.NormalizeScale(), T.SamplePoints(10000)
+        self.data = ModelNet(path, '40', False, transform, pre_transform)
+
+    def __getitem__(self, item):
+        pointcloud = self.data[item]
+        label = "unknown"
+        return pointcloud, label
+
+    def __len__(self):
+        return self.data.shape[0]
+
 
 
 class ModelNet40(Dataset):

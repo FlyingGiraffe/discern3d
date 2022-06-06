@@ -2,15 +2,12 @@ import os
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import minkowski
-from datetime import datetime
 import time
-from vis import vis_voxel_grid
 import queue
 import threading
 
 from xmlrpc.server import SimpleXMLRPCServer
 from xmlrpc.server import SimpleXMLRPCRequestHandler
-import xmlrpc
 import dill as pickle
 from socket import error as SocketError
 
@@ -20,7 +17,6 @@ AGENT_ALMOST_FINISHED_THREADS = 0
 AGENT_FINISHED_PRIORITY_LISTS = 0
 AGENT0_STARTED_THREADS = 0
 
-from network import Router
 
 # Restrict to a particular path.
 class RequestHandler(SimpleXMLRPCRequestHandler):
@@ -139,6 +135,8 @@ class Agent(object):
             server.register_function(self.get_all_rpc, 'get_all')
             print('Registered GET_ALL RPC')
             server.register_function(self.get_priority_list_rpc, 'get_priority_list')
+            print('Registered GET_PRIORITY_LIST RPC')
+            server.register_function(self.get_all_priority_lists_rpc, 'get_all_priority_lists')
             print('Registered GET_PRIORITY_LIST RPC')
             server.register_function(self.update_priority_list_rpc, 'update_priority_list')
             print('Registered UPDATE_PRIORITY_LIST RPC')
@@ -534,16 +532,16 @@ class Agent(object):
 
 def farthest_subsample_points(pointcloud, view, num_subsampled_points=768):
     # NOTE: following for sidestepping the bug from the uncommented code below
-    points = np.random.randn(num_subsampled_points, 3)
-    points /= np.linalg.norm(points, axis=1, keepdims=True)
-    return points
+    # points = np.random.randn(num_subsampled_points, 3)
+    # points /= np.linalg.norm(points, axis=1, keepdims=True)
+    # return points
     
-    # num_points = pointcloud.shape[0]
-    # nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
-    #                          metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
-    #
-    # idx = nbrs.kneighbors(view, return_distance=False).reshape((num_subsampled_points,))
-    # return pointcloud[idx, :]
+    num_points = pointcloud.shape[0]
+    nbrs = NearestNeighbors(n_neighbors=num_subsampled_points, algorithm='auto',
+                             metric=lambda x, y: minkowski(x, y)).fit(pointcloud)
+    idx = nbrs.kneighbors(view, return_distance=False)
+    idx = idx.flatten()
+    return pointcloud[idx, :]
 
 
 def grid2idx(grid):

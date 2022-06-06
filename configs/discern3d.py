@@ -21,8 +21,8 @@ Discern3D = {
     'num_agents': 3,
     'agent_kwargs': {
         # scene representation
-        'grid_coarse': 4,
-        'grid_fine': 32,  # was 3 x 64!
+        'grid_coarse': 4,  # 25 for shape visualization
+        'grid_fine': 32,  # 6 for shape visualization
         
         # scanner simulation
         'num_points_view': 512, # number of points that can be seen from a view

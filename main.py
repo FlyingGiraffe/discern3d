@@ -12,14 +12,18 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, default='Discern3D', help='config file name')
     parser.add_argument('--class_choice', type=str, default='airplane', help='dataset class choice')
     parser.add_argument('--shape_idx', type=int, default=4, help='dataset shape idx')
+    # ~500 for cars, 0-100 for airplanes
     args = parser.parse_args()
-    
+
     config = getattr(configs, args.config)
     metadata = configs.extract_metadata(config, 0)
     metadata['dataset_kwargs']['class_choice'] = args.class_choice
     
-    shapenet = dataset.ShapeNetPart(metadata['dataset_kwargs'])
-    shape_data = shapenet[args.shape_idx][0]
+    # shapenet = dataset.ShapeNetPart(metadata['dataset_kwargs'])
+    # shape_data = shapenet[args.shape_idx][0]
+    modelnet = dataset.ModelNet10HighRes(metadata['dataset_kwargs'])
+    shape_data = modelnet[args.shape_idx][0].pos
+    shape_data = shape_data.numpy()
     
     UniversalRouter = Router(metadata['agent_kwargs']['agent_ips'],
                             intragroup_link_failure_prob=metadata['simulation']['intragroup_link_failure_prob'], 
@@ -48,5 +52,5 @@ if __name__ == '__main__':
 
 
     for i in range(len(agents)):
-        agents[i].run(shape_data, viewpoint_per_agent[i:i+1], identity_transition, gossip_hz=20, update_retry_hz=20, scan_hz=20, clean_hz=20, lowres_hz=20)
+        agents[i].run(shape_data, viewpoint_per_agent[i:i+1], identity_transition, gossip_hz=6, update_retry_hz=6, scan_hz=2, clean_hz=6, lowres_hz=6)
     # agents[0].scan_loop(shape_data, np.array([[0.0, 0.0, 1.0]]), identity_transition, finished_callback, scan_hz=20, vis=True)
