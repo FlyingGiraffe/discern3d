@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import open3d as o3d
 import seaborn as sns
-from visualization import viz_utils as utils
+import viz_utils as utils
 
 PALLETTE = sns.color_palette("bright")
 c1, c3 = PALLETTE[1], PALLETTE[3]

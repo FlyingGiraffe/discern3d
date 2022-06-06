@@ -3,3 +3,6 @@ torch>=1.4.0
 sklearn
 matplotlib
 dill
+open3d
+seaborn
+h5py
