@@ -142,6 +142,8 @@ class Agent(object):
             print('Registered UPDATE_PRIORITY_LIST RPC')
             server.register_function(self.update_rpc, 'update')
             print('Registered UPDATE RPC')
+            server.register_function(self.get_all_priority_lists_rpc, 'get_all_priority_lists')
+            print('Registered UPDATE_ALL_PRIORITY_LISTS RPC')
             server.serve_forever()
 
     def get_rpc(self, course_idx):
@@ -448,8 +450,8 @@ class Agent(object):
             fine_scan = dense2sparse(fine_scan)
             res = s.update(course_idx, packet_id, fine_scan.tolist())
         except (ConnectionRefusedError, ConnectionResetError, TimeoutError, SocketError, IOError) as e:
-            print("Error occured:")
-            print(e)
+            # print("Error occured:")
+            # print(e)
             return False
 
         return res == 'success'
